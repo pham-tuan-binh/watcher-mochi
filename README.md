@@ -15,9 +15,20 @@ Custom firmware for the [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-
 Format a microSD card as FAT32 and copy the contents of `sd_content/` to the root:
 
 - **blank.gif** — idle/default animation shown between GIFs
-- **\*.gif** — any other GIF files to be randomly played
+- **\*.gif** — any other GIF files to be randomly played (63 included in `sd_content/`)
 
 GIFs are scaled to fill the 412px screen width automatically.
+
+### Sample GIFs
+
+| | | | | |
+|:-:|:-:|:-:|:-:|:-:|
+| ![happy](sd_content/happy.gif) | ![dancing](sd_content/dancing.gif) | ![love](sd_content/love.gif) | ![sleepy](sd_content/sleepy.gif) | ![surprised](sd_content/surprised.gif) |
+| happy | dancing | love | sleepy | surprised |
+| ![devil](sd_content/devil.gif) | ![sparkle](sd_content/sparkle.gif) | ![sushi](sd_content/sushi.gif) | ![rain](sd_content/rain.gif) | ![wink](sd_content/wink.gif) |
+| devil | sparkle | sushi | rain | wink |
+
+...and 53 more in `sd_content/`.
 
 ## Build & Flash
 
@@ -30,4 +41,4 @@ idf.py flash monitor
 
 ## Configuration
 
-Board-specific defaults are in `sdkconfig.defaults`. Use `idf.py menuconfig` to change settings like Wi-Fi credentials or codec board type.
+Board-specific defaults are in `sdkconfig.defaults`. Use `idf.py menuconfig` to adjust settings.

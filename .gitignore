@@ -14,5 +14,3 @@ dist/
 # macOS
 .DS_Store
 
-# SD card content (local only)
-sd_content/

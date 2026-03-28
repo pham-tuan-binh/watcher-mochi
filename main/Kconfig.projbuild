@@ -1,1 +1,19 @@
-# No configuration options needed
+menu "Mochi"
+
+    config MOCHI_DEEP_SLEEP_TIMEOUT_SEC
+        int "Deep sleep inactivity timeout (seconds)"
+        range 30 3600
+        default 300
+        help
+            Seconds of inactivity before the device enters deep sleep.
+            Default is 300 (5 minutes).
+
+    config MOCHI_IDLE_AUTO_PLAY_SEC
+        int "Idle auto-play interval (seconds)"
+        range 5 300
+        default 30
+        help
+            Seconds to wait on the blank screen before auto-playing a random GIF.
+            Default is 30.
+
+endmenu
