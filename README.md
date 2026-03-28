@@ -11,10 +11,12 @@ Build your own [Dasai Mochi](https://dasai.co) with [SenseCAP Watcher](https://w
 
 ## What You Need
 
-- A [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html)
+- SenseCap Watcher: [Buy here - 99$ - Coupon: 5EB420ZS](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html?sensecap_affiliate=3gToNR2&referring_service=link)
 - A microSD card (any size, FAT32 formatted)
 - A USB-C cable
 - A computer with [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/) v5.4+ installed
+
+If you want to buy a SenseCap Watcher, consider buying with the link or coupon above. It's an affiliate link so I'll get a small percentage of your order as appreciation ^^
 
 ## Step 1: Prepare the SD Card
 
