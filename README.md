@@ -1,6 +1,13 @@
 # Watcher Mochi
 
-Custom firmware for the [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html) (ESP32-S3) — a DIY [Dasai Mochi](https://dasai.co). Tap the screen or wait — it picks a random GIF from the SD card, plays it with a satisfying pop sound, then returns to idle.
+Build your own [Dasai Mochi](https://dasai.co) with [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html). Tap the screen or wait, it picks a random GIF from the SD card, plays it with a satisfying pop sound, then returns to idle.
+
+| | | | | |
+|:-:|:-:|:-:|:-:|:-:|
+| ![happy](sd_content/happy.gif) | ![dancing](sd_content/dancing.gif) | ![love](sd_content/love.gif) | ![sleepy](sd_content/sleepy.gif) | ![surprised](sd_content/surprised.gif) |
+| happy | dancing | love | sleepy | surprised |
+| ![devil](sd_content/devil.gif) | ![sparkle](sd_content/sparkle.gif) | ![sushi](sd_content/sushi.gif) | ![rain](sd_content/rain.gif) | ![wink](sd_content/wink.gif) |
+| devil | sparkle | sushi | rain | wink |
 
 ## Features
 
@@ -14,21 +21,8 @@ Custom firmware for the [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-
 
 Format a microSD card as FAT32 and copy the contents of `sd_content/` to the root:
 
-- **blank.gif** — idle/default animation shown between GIFs
-- **\*.gif** — any other GIF files to be randomly played (63 included in `sd_content/`)
-
-GIFs are scaled to fill the 412px screen width automatically.
-
-### Sample GIFs
-
-| | | | | |
-|:-:|:-:|:-:|:-:|:-:|
-| ![happy](sd_content/happy.gif) | ![dancing](sd_content/dancing.gif) | ![love](sd_content/love.gif) | ![sleepy](sd_content/sleepy.gif) | ![surprised](sd_content/surprised.gif) |
-| happy | dancing | love | sleepy | surprised |
-| ![devil](sd_content/devil.gif) | ![sparkle](sd_content/sparkle.gif) | ![sushi](sd_content/sushi.gif) | ![rain](sd_content/rain.gif) | ![wink](sd_content/wink.gif) |
-| devil | sparkle | sushi | rain | wink |
-
-...and 53 more in `sd_content/`.
+- **blank.gif** - idle/default animation shown between GIFs
+- **\*.gif** - any other GIF files to be randomly played (63 included in `sd_content/`)
 
 ## Build & Flash
 
