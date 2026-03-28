@@ -7,32 +7,48 @@
 | ![devil](sd_content/devil.gif) | ![sparkle](sd_content/sparkle.gif) | ![sushi](sd_content/sushi.gif) |   ![rain](sd_content/rain.gif)   |      ![wink](sd_content/wink.gif)      |
 |             devil              |              sparkle               |             sushi              |               rain               |                  wink                  |
 
-Build your own [Dasai Mochi](https://dasai.co) with [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html). Tap the screen or wait, it picks a random GIF from the SD card, plays it with a satisfying pop sound, then returns to idle.
+Build your own [Dasai Mochi](https://dasai.co) with [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html).
 
-## Features
+## What You Need
 
-- Plays random GIFs from the SD card on the 412px round LCD
-- Tap-to-play with zoom animation and pop sound feedback
-- Auto-plays a random GIF every 30 seconds when idle
-- Deep sleep after 5 minutes of inactivity (or long-press the button)
-- Wakes on button press
+- A [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html)
+- A microSD card (any size, FAT32 formatted)
+- A USB-C cable
+- A computer with [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/) v5.4+ installed
 
-## SD Card Setup
+## Step 1: Prepare the SD Card
 
-Format a microSD card as FAT32 and copy the contents of `sd_content/` to the root:
+1. Format your microSD card as **FAT32**
+2. Copy all the `.gif` files from the `sd_content/` folder in this repo onto the root of the SD card
+3. Insert the SD card into your Watcher
 
-- **blank.gif** - idle/default animation shown between GIFs
-- **\*.gif** - any other GIF files to be randomly played (63 included in `sd_content/`)
+I've included 63 animations plus a `blank.gif` that shows between animations. You can add your own GIFs too - just drop any `.gif` file onto the root of the SD card.
 
-## Build & Flash
+## Step 2: Install ESP-IDF
 
-Requires [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/) v5.4+.
+If you don't have ESP-IDF set up yet, follow the [official getting started guide](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/) for your platform (Windows, macOS, or Linux). Make sure you install **v5.4 or newer**.
+
+## Step 3: Build and Flash
+
+1. Connect your Watcher to your computer via USB-C
+2. Open a terminal in this project folder
+3. Run:
 
 ```sh
 idf.py build
 idf.py flash monitor
 ```
 
+`flash` uploads the firmware to your Watcher. `monitor` shows the serial log so you can see what's happening. Press `Ctrl+]` to exit the monitor.
+
+## How It Works
+
+- **Tap the screen** to play a random animation with a pop sound
+- **Wait 30 seconds** and it auto-plays a random animation on its own
+- **Leave it alone for 5 minutes** and it enters deep sleep to save power
+- **Long-press the button** to manually enter deep sleep
+- **Press the button** to wake it back up
+
 ## Configuration
 
-Board-specific defaults are in `sdkconfig.defaults`. Use `idf.py menuconfig` to adjust settings.
+You can tweak settings like the sleep timeout and auto-play interval through `idf.py menuconfig` under the **Mochi** menu. Defaults are in `sdkconfig.defaults`.
