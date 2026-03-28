@@ -1,0 +1,5 @@
+version: "1.0.0"
+description: "Rlottie component for ESP-IDF"
+
+targets:
+  - esp32s3

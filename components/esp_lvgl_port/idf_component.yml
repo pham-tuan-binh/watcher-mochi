@@ -1,0 +1,8 @@
+dependencies:
+  idf:
+    version: '>=4.4'
+  lvgl/lvgl: 
+    override_path: "../lvgl"
+description: ESP LVGL port
+url: https://github.com/espressif/esp-bsp/tree/master/components/esp_lvgl_port
+version: 1.4.0

@@ -1,0 +1,41 @@
+version: "1.0.0"
+description: Board Support Package for SenseCAP Watcheer
+
+targets:
+  - esp32s3
+
+dependencies:
+  idf: ">=5.2.0"
+
+  espressif/esp_lvgl_port:
+    override_path: "../esp_lvgl_port"
+
+  espressif/esp_lcd_spd2010:
+    version: "1.0.1"
+    public: true
+
+  espressif/esp_lcd_touch_spd2010:
+    version: "0.0.1"
+    public: true
+
+  esp_codec_dev:
+    version: "~1.4.0"
+    public: true
+
+  led_strip:
+    version: "2.5.4"
+    public: true
+
+  button:
+    version: "3.2.3"
+    public: true
+
+  knob:
+    version: "0.1.4"
+    public: true
+
+  sscma_client:
+    path: "../sscma_client"
+
+  esp_io_expander_pca95xx_16bit:
+    path: "../esp_io_expander_pca95xx_16bit"

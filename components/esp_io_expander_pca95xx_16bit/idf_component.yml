@@ -1,0 +1,7 @@
+version: 1.0.0
+description: ESP IO Expander - PCA9539 and PCA9555
+url: https://github.com/Seeed-Studio/SenseCAP_Watcher/tree/main/components/esp_io_expander_pca95xx_16bit
+dependencies:
+  idf: ">=4.4.2"
+  espressif/esp_io_expander:
+    version: "^1.0.1"

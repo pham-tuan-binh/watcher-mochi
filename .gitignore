@@ -1,0 +1,18 @@
+# Build
+build/
+managed_components/
+dependencies.lock
+sdkconfig
+sdkconfig.old
+dist/
+
+# IDE / editor
+.vscode/
+.cache/
+.claude/
+
+# macOS
+.DS_Store
+
+# SD card content (local only)
+sd_content/

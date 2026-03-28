@@ -1,0 +1,8 @@
+dependencies:
+  idf: ">=5.4"
+  sensecap-watcher:
+    override_path: ../components/sensecap-watcher
+  esp_io_expander_pca95xx_16bit:
+    override_path: ../components/esp_io_expander_pca95xx_16bit
+  esp_lvgl_port:
+    override_path: ../components/esp_lvgl_port
