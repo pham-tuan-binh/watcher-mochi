@@ -52,3 +52,9 @@ idf.py flash monitor
 ## Configuration
 
 You can tweak settings like the sleep timeout and auto-play interval through `idf.py menuconfig` under the **Mochi** menu. Defaults are in `sdkconfig.defaults`.
+
+## License
+
+The firmware source code is licensed under the [Apache License 2.0](LICENSE).
+
+The GIF animations in `sd_content/` are property of [Dasai](https://dasai.co) and are included here for personal use with the Watcher Mochi project. All rights to the animations belong to Dasai.
