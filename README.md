@@ -1,13 +1,13 @@
 # Watcher Mochi
 
-Build your own [Dasai Mochi](https://dasai.co) with [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html). Tap the screen or wait, it picks a random GIF from the SD card, plays it with a satisfying pop sound, then returns to idle.
+|                                |                                    |                                |                                  |                                        |
+| :----------------------------: | :--------------------------------: | :----------------------------: | :------------------------------: | :------------------------------------: |
+| ![happy](sd_content/happy.gif) | ![dancing](sd_content/dancing.gif) |  ![love](sd_content/love.gif)  | ![sleepy](sd_content/sleepy.gif) | ![surprised](sd_content/surprised.gif) |
+|             happy              |              dancing               |              love              |              sleepy              |               surprised                |
+| ![devil](sd_content/devil.gif) | ![sparkle](sd_content/sparkle.gif) | ![sushi](sd_content/sushi.gif) |   ![rain](sd_content/rain.gif)   |      ![wink](sd_content/wink.gif)      |
+|             devil              |              sparkle               |             sushi              |               rain               |                  wink                  |
 
-| | | | | |
-|:-:|:-:|:-:|:-:|:-:|
-| ![happy](sd_content/happy.gif) | ![dancing](sd_content/dancing.gif) | ![love](sd_content/love.gif) | ![sleepy](sd_content/sleepy.gif) | ![surprised](sd_content/surprised.gif) |
-| happy | dancing | love | sleepy | surprised |
-| ![devil](sd_content/devil.gif) | ![sparkle](sd_content/sparkle.gif) | ![sushi](sd_content/sushi.gif) | ![rain](sd_content/rain.gif) | ![wink](sd_content/wink.gif) |
-| devil | sparkle | sushi | rain | wink |
+Build your own [Dasai Mochi](https://dasai.co) with [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html). Tap the screen or wait, it picks a random GIF from the SD card, plays it with a satisfying pop sound, then returns to idle.
 
 ## Features
 
