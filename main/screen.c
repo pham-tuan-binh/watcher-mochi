@@ -1,3 +1,5 @@
+#include <stdatomic.h>
+
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "lvgl.h"
@@ -9,7 +11,13 @@
 
 static const char *TAG = "screen";
 
+#define KNOB_POLL_MS 50
+
 static void (*s_tap_cb)(void);
+
+/// Knob events arrive on the knob's timer, so detents are only accumulated
+/// there and applied from the LVGL task, which owns the pond's state.
+static atomic_int s_knob_detents;
 
 /// Give LVGL a frame or two to push the first pond render out to the panel
 /// before the backlight comes up, so the display never flashes garbage.
@@ -17,6 +25,16 @@ static void backlight_cb(lv_timer_t *t)
 {
     board_set_lcd_brightness(100);
     lv_timer_del(t);
+}
+
+static void knob_poll_cb(lv_timer_t *t)
+{
+    (void)t;
+    int detents = atomic_exchange(&s_knob_detents, 0);
+    if (detents == 0)
+        return;
+    if (pond_zoom(detents))
+        sound_play(SOUND_TICK);
 }
 
 static void screen_press_cb(lv_event_t *e)
@@ -28,7 +46,7 @@ static void screen_press_cb(lv_event_t *e)
     if (indev && lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER)
         lv_indev_get_point(indev, &p);
 
-    sound_play_pop();
+    sound_play(SOUND_DROP);
     pond_tap(p.x, p.y);
 
     if (s_tap_cb)
@@ -47,6 +65,7 @@ void screen_init(void)
 
     pond_init(scr);
     lv_timer_create(backlight_cb, 200, NULL);
+    lv_timer_create(knob_poll_cb, KNOB_POLL_MS, NULL);
 
     lvgl_port_unlock();
 
@@ -56,4 +75,9 @@ void screen_init(void)
 void screen_set_tap_cb(void (*cb)(void))
 {
     s_tap_cb = cb;
+}
+
+void screen_knob(int dir)
+{
+    atomic_fetch_add(&s_knob_detents, dir);
 }
