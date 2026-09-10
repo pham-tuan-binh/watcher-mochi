@@ -13,15 +13,19 @@ menu "Mochi"
         range 1 8
         default 3
         help
-            How many koi swim around. They cycle through three colourways.
+            How many koi to simulate at boot. They cycle through three
+            colourways, and roam past the rim, so the number visible on
+            screen drifts either side of this. Changeable at runtime with
+            pond_set_population().
 
     config MOCHI_POND_LILY_COUNT
         int "Number of lily pads"
         range 0 12
         default 5
         help
-            Lily pads are scattered randomly on every boot. Set to 0 for
-            open water.
+            How many lily pads to simulate at boot. They are scattered
+            randomly on every boot and drift around afterwards. Set to 0
+            for open water.
 
     config MOCHI_POND_MOTE_COUNT
         int "Number of drifting motes"
