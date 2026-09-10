@@ -1,12 +1,17 @@
 /**
  * A small pixel-art koi pond, lit like a cave.
  *
- * Everything is simulated on a low resolution grid (GRID_W x GRID_H) and
- * blown up by PIX in both directions into an LVGL canvas. Two buffers are
- * kept per grid pixel: a material (water, pad, koi, ...) and a light level.
- * Colour only comes together at blit time, where each material is looked up
- * in its own dark-to-lit ramp. Anything that glows just adds light, so the
- * koi, the ripples and the motes all sit in the same lighting model.
+ * The pond is a fixed WORLD_W x WORLD_W world of "world pixels". The screen
+ * is a camera window into it: every world pixel is drawn as a s_pix x s_pix
+ * block, so the zoom level decides both how much of the pond is visible and
+ * how chunky it looks. Fully zoomed out the whole pond fits the panel;
+ * zoomed in the camera drifts after one of the koi.
+ *
+ * Two buffers are kept per visible cell: a material (water, pad, koi, ...)
+ * and a light level. Colour only comes together at blit time, where each
+ * material is looked up in its own dark-to-lit ramp. Anything that glows
+ * just adds light, so the koi, the ripples and the motes all sit in the
+ * same lighting model.
  *
  * Per frame: ambient water light -> koi glow -> ripple light -> koi bodies
  * -> lily pads -> motes -> blit. Glow is only added to open water so a ring
@@ -25,18 +30,26 @@
 #include "lvgl.h"
 #include "sensecap-watcher.h"
 #include "pond.h"
+#include "sound.h"
 
 static const char *TAG = "pond";
 
 // --- Geometry ---
+//
+// World coordinates are in world pixels. At the widest zoom one world pixel
+// covers PIX_MIN screen pixels and the world exactly fills the panel, which
+// fixes the size of every buffer below.
 
-#define PIX      4                        /* screen pixels per pond pixel */
-#define GRID_W   (DRV_LCD_H_RES / PIX)
-#define GRID_H   (DRV_LCD_V_RES / PIX)
-#define GRID_CX  (GRID_W / 2)
-#define GRID_CY  (GRID_H / 2)
-#define POND_R   (GRID_W / 2)             /* the display is round */
-#define FRAME_MS 40
+#define PIX_MIN   4
+#define WORLD_W   (DRV_LCD_H_RES / PIX_MIN)   /* 103 */
+#define WORLD_CX  (WORLD_W / 2)
+#define WORLD_CY  (WORLD_W / 2)
+#define POND_R    (WORLD_W / 2)               /* the display is round */
+#define FRAME_MS  40
+
+/* Zoom detents, in screen pixels per world pixel. */
+static const uint8_t ZOOM_PIX[] = { 4, 5, 6, 8, 10, 13 };
+#define ZOOM_STEPS ((int)(sizeof ZOOM_PIX / sizeof ZOOM_PIX[0]))
 
 #define KOI_COUNT   CONFIG_MOCHI_POND_KOI_COUNT
 #define PAD_COUNT   CONFIG_MOCHI_POND_LILY_COUNT
@@ -82,7 +95,7 @@ static lv_color_t s_pal[MAT_COUNT * LEVELS];
 #define KOI_W 11
 #define KOI_H 7
 #define KOI_PIVOT 5    /* body-space x the koi turns about */
-#define KOI_REACH 8    /* body bounding box half-size on the grid */
+#define KOI_REACH 8    /* body bounding box half-size, world pixels */
 #define KOI_GLOW_R 10  /* halo cast on the surrounding water */
 
 static const char *const KOI_ART[KOI_H] = {
@@ -140,13 +153,13 @@ static uint32_t rnd(uint32_t n)
     return esp_random() % n;
 }
 
-// --- Entities ---
+// --- Entities, all positioned in world coordinates ---
 
 typedef struct {
-    int32_t x, y;      /* grid position, 8.8 fixed point */
+    int32_t x, y;      /* 8.8 fixed point */
     uint8_t heading;   /* 0..255 */
     uint8_t phase;     /* tail wiggle phase */
-    int16_t speed;     /* 8.8 grid pixels per frame */
+    int16_t speed;     /* 8.8 world pixels per frame */
     int8_t  turn;
     uint8_t type;
     uint16_t boost;    /* frames left chasing the last tap */
@@ -175,7 +188,7 @@ typedef struct {
     bool active;
 } ripple_t;
 
-#define RIPPLE_SPEED 340   /* 8.8 grid pixels per frame */
+#define RIPPLE_SPEED 340   /* 8.8 world pixels per frame */
 #define RIPPLE_LIFE  46
 
 static koi_t s_koi[KOI_COUNT];
@@ -187,25 +200,81 @@ static mote_t s_motes[MOTE_COUNT];
 #endif
 static ripple_t s_ripples[MAX_RIPPLES];
 
-static uint8_t s_mat[GRID_H][GRID_W];
-static int16_t s_light[GRID_H][GRID_W];
+static uint8_t s_mat[WORLD_W][WORLD_W];
+static int16_t s_light[WORLD_W][WORLD_W];
 static int8_t s_dither[4][4];
 
 static lv_color_t s_row[DRV_LCD_H_RES];
 static lv_color_t *s_canvas_buf;
 static lv_obj_t *s_canvas;
 static uint32_t s_frame;
-static uint16_t s_next_ambient;
+static uint16_t s_next_surface;
+static uint16_t s_next_distant;
+
+// --- Camera ---
+
+static int s_zoom;                  /* index into ZOOM_PIX */
+static int s_pix = PIX_MIN;         /* screen pixels per world pixel */
+static int s_gw = WORLD_W;          /* visible cells across */
+static int s_gh = WORLD_W;
+static int32_t s_cam_x, s_cam_y;    /* 8.8 world coords of the view centre */
+static int s_ox, s_oy;              /* world coords of the top-left cell */
+static int s_focus = -1;            /* koi the camera is following, or -1 */
+
+#define CAM_LEAD 5                  /* world pixels ahead of the focus koi */
 
 /// Light stays in 0..255; blit quantises it into LEVELS steps.
 #define LIGHT_MAX 255
 
-static inline void light_add(int gx, int gy, int amount)
+static inline void light_add(int vx, int vy, int amount)
 {
-    int v = s_light[gy][gx] + amount;
+    int v = s_light[vy][vx] + amount;
     if (v < 0) v = 0;
     if (v > LIGHT_MAX) v = LIGHT_MAX;
-    s_light[gy][gx] = (int16_t)v;
+    s_light[vy][vx] = (int16_t)v;
+}
+
+static void camera_apply_zoom(void)
+{
+    s_pix = ZOOM_PIX[s_zoom];
+    s_gw = (DRV_LCD_H_RES + s_pix - 1) / s_pix;
+    s_gh = (DRV_LCD_V_RES + s_pix - 1) / s_pix;
+}
+
+static void camera_update(void)
+{
+    int32_t tx = (int32_t)WORLD_CX << 8;
+    int32_t ty = (int32_t)WORLD_CY << 8;
+
+    if (s_focus >= 0) {
+        /* aim a little ahead of the fish: the easing below lags behind, and
+         * the two roughly cancel out to keep it framed */
+        const koi_t *k = &s_koi[s_focus];
+        tx = k->x + COS(k->heading) * CAM_LEAD;
+        ty = k->y + SIN(k->heading) * CAM_LEAD;
+    }
+
+    /* keep the window from wandering far past the rim into dead water */
+    int off_max = POND_R + 8 - s_gw / 2;
+    if (off_max < 0)
+        off_max = 0;
+    int dx = (int)((tx >> 8) - WORLD_CX);
+    int dy = (int)((ty >> 8) - WORLD_CY);
+    int d2 = dx * dx + dy * dy;
+    if (d2 > off_max * off_max) {
+        int d = isqrt32(d2);
+        if (d > 0) {
+            tx = ((int32_t)(WORLD_CX + dx * off_max / d)) << 8;
+            ty = ((int32_t)(WORLD_CY + dy * off_max / d)) << 8;
+        }
+    }
+
+    /* a lazy camera operator: always drifting towards the target */
+    s_cam_x += (tx - s_cam_x) >> 4;
+    s_cam_y += (ty - s_cam_y) >> 4;
+
+    s_ox = (int)(s_cam_x >> 8) - s_gw / 2;
+    s_oy = (int)(s_cam_y >> 8) - s_gh / 2;
 }
 
 // --- Water ---
@@ -219,13 +288,15 @@ static void draw_water(void)
     int a3 = 3 * (int)s_frame;
     const int r2max = POND_R * POND_R;
 
-    for (int y = 0; y < GRID_H; y++) {
-        int dy = y - GRID_CY;
+    for (int vy = 0; vy < s_gh; vy++) {
+        int y = s_oy + vy;
+        int dy = y - WORLD_CY;
         int dy2 = dy * dy;
-        uint8_t *mrow = s_mat[y];
-        int16_t *lrow = s_light[y];
-        for (int x = 0; x < GRID_W; x++) {
-            int dx = x - GRID_CX;
+        uint8_t *mrow = s_mat[vy];
+        int16_t *lrow = s_light[vy];
+        for (int vx = 0; vx < s_gw; vx++) {
+            int x = s_ox + vx;
+            int dx = x - WORLD_CX;
             int d2 = dx * dx + dy2;
 
             /* slow crossing swells, quantised later into dithered bands */
@@ -239,21 +310,21 @@ static void draw_water(void)
                   - (dx + dy) / 3;
             if (l < 0) l = 0;
 
-            mrow[x] = MAT_WATER;
-            lrow[x] = (int16_t)l;
+            mrow[vx] = MAT_WATER;
+            lrow[vx] = (int16_t)l;
         }
     }
 }
 
 // --- Ripples ---
 
-static void ripple_spawn(int gx, int gy, int delay, int life)
+static void ripple_spawn(int wx, int wy, int delay, int life)
 {
     for (int i = 0; i < MAX_RIPPLES; i++) {
         if (s_ripples[i].active)
             continue;
-        s_ripples[i].x = (int16_t)gx;
-        s_ripples[i].y = (int16_t)gy;
+        s_ripples[i].x = (int16_t)wx;
+        s_ripples[i].y = (int16_t)wy;
         s_ripples[i].age = (int16_t)-delay;
         s_ripples[i].life = (int16_t)life;
         s_ripples[i].active = true;
@@ -289,6 +360,7 @@ static void ripples_draw(void)
         if (rem < rp->life / 3)          str = 1;
         else if (rem < rp->life * 2 / 3) str = 2;
 
+        int cx = rp->x - s_ox, cy = rp->y - s_oy;
         int lo = rad - 4;
         if (lo < 0)
             lo = 0;
@@ -296,25 +368,25 @@ static void ripples_draw(void)
         int lo2 = lo * lo, hi2 = hi * hi, r2 = rad * rad;
         int den = 2 * rad;
 
-        int y0 = rp->y - hi, y1 = rp->y + hi;
+        int y0 = cy - hi, y1 = cy + hi;
         if (y0 < 0) y0 = 0;
-        if (y1 >= GRID_H) y1 = GRID_H - 1;
+        if (y1 >= s_gh) y1 = s_gh - 1;
 
-        for (int y = y0; y <= y1; y++) {
-            int dy = y - rp->y;
+        for (int vy = y0; vy <= y1; vy++) {
+            int dy = vy - cy;
             int dy2 = dy * dy;
             if (dy2 > hi2)
                 continue;
             int half = isqrt32(hi2 - dy2);
-            int x0 = rp->x - half, x1 = rp->x + half;
+            int x0 = cx - half, x1 = cx + half;
             if (x0 < 0) x0 = 0;
-            if (x1 >= GRID_W) x1 = GRID_W - 1;
+            if (x1 >= s_gw) x1 = s_gw - 1;
 
-            const uint8_t *mrow = s_mat[y];
-            for (int x = x0; x <= x1; x++) {
-                if (mrow[x] != MAT_WATER)
+            const uint8_t *mrow = s_mat[vy];
+            for (int vx = x0; vx <= x1; vx++) {
+                if (mrow[vx] != MAT_WATER)
                     continue;
-                int dx = x - rp->x;
+                int dx = vx - cx;
                 int d2 = dx * dx + dy2;
                 if (d2 < lo2)
                     continue;
@@ -322,11 +394,11 @@ static void ripples_draw(void)
                 /* (d2 - r2) / 2r approximates the signed distance to the ring */
                 int k = (d2 - r2) / den;
                 if (k >= -1 && k <= 1)
-                    light_add(x, y, str * 34);
+                    light_add(vx, vy, str * 34);
                 else if (k == -2 || k == 2)
-                    light_add(x, y, str * 12);
+                    light_add(vx, vy, str * 12);
                 else if (k > 2 && str >= 2)
-                    light_add(x, y, -22);
+                    light_add(vx, vy, -22);
             }
         }
     }
@@ -347,8 +419,8 @@ static void pad_place(pad_t *p, int idx)
         int a = (int)rnd(256);
         /* pick the radius by area so the pads do not bunch up in the middle */
         int d = isqrt32((int32_t)rnd((uint32_t)(reach * reach) + 1));
-        p->cx = (int16_t)(GRID_CX + ((COS(a) * d) >> 8));
-        p->cy = (int16_t)(GRID_CY + ((SIN(a) * d) >> 8));
+        p->cx = (int16_t)(WORLD_CX + ((COS(a) * d) >> 8));
+        p->cy = (int16_t)(WORLD_CY + ((SIN(a) * d) >> 8));
 
         bool clear = true;
         for (int j = 0; j < idx; j++) {
@@ -368,20 +440,20 @@ static void pad_place(pad_t *p, int idx)
 /// Pads read as dark silhouettes with a lit rim on the side facing the light.
 static void draw_pad(const pad_t *p)
 {
-    int cx = p->cx;
-    int cy = p->cy + (SIN(p->phase) >> 8);   /* gentle bob, +/- 1 pixel */
+    int cx = p->cx - s_ox;
+    int cy = p->cy - s_oy + (SIN(p->phase) >> 8);   /* gentle bob, +/- 1 px */
     int r = p->r;
     int r2 = r * r;
     int inner2 = (r - 1) * (r - 1);
     int ncs = COS(p->notch), nsn = SIN(p->notch);
 
     for (int dy = -r; dy <= r; dy++) {
-        int y = cy + dy;
-        if (y < 0 || y >= GRID_H)
+        int vy = cy + dy;
+        if (vy < 0 || vy >= s_gh)
             continue;
         for (int dx = -r; dx <= r; dx++) {
-            int x = cx + dx;
-            if (x < 0 || x >= GRID_W)
+            int vx = cx + dx;
+            if (vx < 0 || vx >= s_gw)
                 continue;
             int d2 = dx * dx + dy * dy;
             if (d2 > r2)
@@ -393,17 +465,17 @@ static void draw_pad(const pad_t *p)
             if (dot > r / 4 && abs(cross) * 5 < (dot - r / 4) * 2)
                 continue;
 
-            int lit = s_light[y][x];
+            int lit = s_light[vy][vx];
             if (d2 >= inner2 && dx + dy < 0) {
-                s_mat[y][x] = MAT_PAD_RIM;          /* catches the light */
+                s_mat[vy][vx] = MAT_PAD_RIM;         /* catches the light */
                 lit = lit + 90;
             } else {
-                s_mat[y][x] = MAT_PAD;              /* in its own shadow */
+                s_mat[vy][vx] = MAT_PAD;             /* in its own shadow */
                 lit = (lit * 3) / 4 - 10 - (dx + dy) * 2;
             }
             if (lit < 0) lit = 0;
             if (lit > LIGHT_MAX) lit = LIGHT_MAX;
-            s_light[y][x] = (int16_t)lit;
+            s_light[vy][vx] = (int16_t)lit;
         }
     }
 
@@ -413,13 +485,13 @@ static void draw_pad(const pad_t *p)
     /* a bright heart with four dim petals on the diagonals */
     static const int8_t PETALS[4][2] = { { -1, -1 }, { 1, -1 }, { -1, 1 }, { 1, 1 } };
     for (int i = 0; i < 4; i++) {
-        int x = cx + PETALS[i][0], y = cy + PETALS[i][1];
-        if (x < 0 || x >= GRID_W || y < 0 || y >= GRID_H)
+        int vx = cx + PETALS[i][0], vy = cy + PETALS[i][1];
+        if (vx < 0 || vx >= s_gw || vy < 0 || vy >= s_gh)
             continue;
-        s_mat[y][x] = MAT_FLOWER;
-        s_light[y][x] = 165;
+        s_mat[vy][vx] = MAT_FLOWER;
+        s_light[vy][vx] = 165;
     }
-    if (cx >= 0 && cx < GRID_W && cy >= 0 && cy < GRID_H) {
+    if (cx >= 0 && cx < s_gw && cy >= 0 && cy < s_gh) {
         s_mat[cy][cx] = MAT_FLOWER;
         s_light[cy][cx] = LIGHT_MAX;
     }
@@ -432,8 +504,8 @@ static void koi_reset(koi_t *k, int i)
 {
     int a = (int)rnd(256);
     int d = (int)rnd(POND_R - 12);
-    k->x = (int32_t)(GRID_CX + ((COS(a) * d) >> 8)) << 8;
-    k->y = (int32_t)(GRID_CY + ((SIN(a) * d) >> 8)) << 8;
+    k->x = (int32_t)(WORLD_CX + ((COS(a) * d) >> 8)) << 8;
+    k->y = (int32_t)(WORLD_CY + ((SIN(a) * d) >> 8)) << 8;
     k->heading = (uint8_t)rnd(256);
     k->phase = (uint8_t)rnd(256);
     k->speed = (int16_t)(70 + rnd(40));
@@ -444,15 +516,15 @@ static void koi_reset(koi_t *k, int i)
 
 static void koi_update(koi_t *k)
 {
-    int gx = k->x >> 8, gy = k->y >> 8;
-    int dx = gx - GRID_CX, dy = gy - GRID_CY;
+    int wx = k->x >> 8, wy = k->y >> 8;
+    int dx = wx - WORLD_CX, dy = wy - WORLD_CY;
     int edge = POND_R - 9;
     int desired = -1;
 
     if (dx * dx + dy * dy > edge * edge) {
         desired = angle_of(-dx, -dy);        /* turn back towards the middle */
     } else if (k->boost) {
-        int tdx = k->tx - gx, tdy = k->ty - gy;
+        int tdx = k->tx - wx, tdy = k->ty - wy;
         if (abs(tdx) + abs(tdy) < 5)
             k->boost = 0;
         else
@@ -481,46 +553,77 @@ static void koi_update(koi_t *k)
 /// Soft halo the koi casts on the water around it.
 static void draw_koi_glow(const koi_t *k)
 {
-    int cx = k->x >> 8, cy = k->y >> 8;
+    int cx = (int)(k->x >> 8) - s_ox, cy = (int)(k->y >> 8) - s_oy;
     const int r = KOI_GLOW_R;
     const int r2 = r * r;
 
-    for (int y = cy - r; y <= cy + r; y++) {
-        if (y < 0 || y >= GRID_H)
+    for (int vy = cy - r; vy <= cy + r; vy++) {
+        if (vy < 0 || vy >= s_gh)
             continue;
-        int dy = y - cy, dy2 = dy * dy;
+        int dy = vy - cy, dy2 = dy * dy;
         if (dy2 > r2)
             continue;
-        const uint8_t *mrow = s_mat[y];
-        for (int x = cx - r; x <= cx + r; x++) {
-            if (x < 0 || x >= GRID_W)
+        const uint8_t *mrow = s_mat[vy];
+        for (int vx = cx - r; vx <= cx + r; vx++) {
+            if (vx < 0 || vx >= s_gw)
                 continue;
-            if (mrow[x] != MAT_WATER)
+            if (mrow[vx] != MAT_WATER)
                 continue;
-            int dx = x - cx;
+            int dx = vx - cx;
             int d2 = dx * dx + dy2;
             if (d2 > r2)
                 continue;
-            light_add(x, y, (48 * (r2 - d2)) / r2);
+            light_add(vx, vy, (48 * (r2 - d2)) / r2);
         }
     }
 }
 
+#if PAD_COUNT > 0
+/// A koi under a lily pad still shows as light bleeding through the leaf,
+/// so the fish never vanishes completely when you are zoomed in on it.
+static void draw_koi_underglow(const koi_t *k)
+{
+    int cx = (int)(k->x >> 8) - s_ox, cy = (int)(k->y >> 8) - s_oy;
+    const int r = 7;
+    const int r2 = r * r;
+
+    for (int vy = cy - r; vy <= cy + r; vy++) {
+        if (vy < 0 || vy >= s_gh)
+            continue;
+        int dy = vy - cy, dy2 = dy * dy;
+        if (dy2 > r2)
+            continue;
+        const uint8_t *mrow = s_mat[vy];
+        for (int vx = cx - r; vx <= cx + r; vx++) {
+            if (vx < 0 || vx >= s_gw)
+                continue;
+            if (mrow[vx] != MAT_PAD)
+                continue;
+            int dx = vx - cx;
+            int d2 = dx * dx + dy2;
+            if (d2 > r2)
+                continue;
+            light_add(vx, vy, (46 * (r2 - d2)) / r2);
+        }
+    }
+}
+#endif /* PAD_COUNT > 0 */
+
 static void draw_koi(const koi_t *k)
 {
-    int cx = k->x >> 8, cy = k->y >> 8;
+    int cx = (int)(k->x >> 8) - s_ox, cy = (int)(k->y >> 8) - s_oy;
     int cs = COS(k->heading), sn = SIN(k->heading);
     const uint8_t *mats = KOI_MAT[k->type];
     int wig_amp = SIN(k->phase);
 
-    for (int y = cy - KOI_REACH; y <= cy + KOI_REACH; y++) {
-        if (y < 0 || y >= GRID_H)
+    for (int vy = cy - KOI_REACH; vy <= cy + KOI_REACH; vy++) {
+        if (vy < 0 || vy >= s_gh)
             continue;
-        int dy = y - cy;
-        for (int x = cx - KOI_REACH; x <= cx + KOI_REACH; x++) {
-            if (x < 0 || x >= GRID_W)
+        int dy = vy - cy;
+        for (int vx = cx - KOI_REACH; vx <= cx + KOI_REACH; vx++) {
+            if (vx < 0 || vx >= s_gw)
                 continue;
-            int dx = x - cx;
+            int dx = vx - cx;
 
             int bx = ((dx * cs + dy * sn) >> 8) + KOI_PIVOT;
             int by = ((-dx * sn + dy * cs) >> 8) + KOI_H / 2;
@@ -538,11 +641,28 @@ static void draw_koi(const koi_t *k)
             if (!v)
                 continue;
 
-            s_mat[y][x] = mats[v - 1];
+            s_mat[vy][vx] = mats[v - 1];
             /* the body is what glows; the tail is thinner and half sunk */
-            s_light[y][x] = (v == 3) ? 148 : 230;
+            s_light[vy][vx] = (v == 3) ? 148 : 230;
         }
     }
+}
+
+/// Index of the koi nearest the camera, for the zoom to latch onto.
+static int koi_nearest_camera(void)
+{
+    int best = 0;
+    int32_t best_d2 = INT32_MAX;
+    for (int i = 0; i < KOI_COUNT; i++) {
+        int32_t dx = (s_koi[i].x - s_cam_x) >> 8;
+        int32_t dy = (s_koi[i].y - s_cam_y) >> 8;
+        int32_t d2 = dx * dx + dy * dy;
+        if (d2 < best_d2) {
+            best_d2 = d2;
+            best = i;
+        }
+    }
+    return best;
 }
 
 // --- Drifting motes ---
@@ -552,8 +672,8 @@ static void mote_reset(mote_t *m)
 {
     int a = (int)rnd(256);
     int d = (int)rnd(POND_R - 6);
-    m->x = (int16_t)((GRID_CX + ((COS(a) * d) >> 8)) << 8);
-    m->y = (int16_t)((GRID_CY + ((SIN(a) * d) >> 8)) << 8);
+    m->x = (int16_t)((WORLD_CX + ((COS(a) * d) >> 8)) << 8);
+    m->y = (int16_t)((WORLD_CY + ((SIN(a) * d) >> 8)) << 8);
     m->heading = (uint8_t)rnd(256);
     m->phase = (uint8_t)rnd(256);
     m->speed = (int16_t)(10 + rnd(14));
@@ -564,8 +684,8 @@ static void mote_update(mote_t *m)
     m->phase = (uint8_t)(m->phase + 3);
     m->heading = (uint8_t)(m->heading + (SIN(m->phase) >> 6));
 
-    int gx = m->x >> 8, gy = m->y >> 8;
-    int dx = gx - GRID_CX, dy = gy - GRID_CY;
+    int wx = m->x >> 8, wy = m->y >> 8;
+    int dx = wx - WORLD_CX, dy = wy - WORLD_CY;
     int edge = POND_R - 4;
     if (dx * dx + dy * dy > edge * edge)
         m->heading = angle_of(-dx, -dy);
@@ -576,24 +696,24 @@ static void mote_update(mote_t *m)
 
 static void draw_mote(const mote_t *m)
 {
-    int cx = m->x >> 8, cy = m->y >> 8;
-    if (cx < 0 || cx >= GRID_W || cy < 0 || cy >= GRID_H)
+    int cx = (int)(m->x >> 8) - s_ox, cy = (int)(m->y >> 8) - s_oy;
+    if (cx < 0 || cx >= s_gw || cy < 0 || cy >= s_gh)
         return;
 
     /* pulse, so the motes breathe rather than sit there */
     int halo = 26 + (SIN(m->phase * 2) >> 4);
 
-    for (int y = cy - 2; y <= cy + 2; y++) {
-        if (y < 0 || y >= GRID_H)
+    for (int vy = cy - 2; vy <= cy + 2; vy++) {
+        if (vy < 0 || vy >= s_gh)
             continue;
-        int dy = y - cy;
-        for (int x = cx - 2; x <= cx + 2; x++) {
-            if (x < 0 || x >= GRID_W)
+        int dy = vy - cy;
+        for (int vx = cx - 2; vx <= cx + 2; vx++) {
+            if (vx < 0 || vx >= s_gw)
                 continue;
-            int d2 = (x - cx) * (x - cx) + dy * dy;
-            if (d2 > 4 || s_mat[y][x] != MAT_WATER)
+            int d2 = (vx - cx) * (vx - cx) + dy * dy;
+            if (d2 > 4 || s_mat[vy][vx] != MAT_WATER)
                 continue;
-            light_add(x, y, halo - d2 * 5);
+            light_add(vx, vy, halo - d2 * 5);
         }
     }
 
@@ -604,27 +724,38 @@ static void draw_mote(const mote_t *m)
 
 // --- Frame ---
 
+/// Expand the visible cells into the canvas, s_pix screen pixels each. The
+/// zoom steps do not all divide the panel evenly, so the last block of a row
+/// or column is clipped — it falls outside the round bezel anyway.
 static void blit(void)
 {
+    const int pix = s_pix;
     lv_color_t *dst = s_canvas_buf;
-    for (int gy = 0; gy < GRID_H; gy++) {
-        const uint8_t *mrow = s_mat[gy];
-        const int16_t *lrow = s_light[gy];
-        const int8_t *drow = s_dither[gy & 3];
+    int rows_left = DRV_LCD_V_RES;
+
+    for (int vy = 0; vy < s_gh && rows_left > 0; vy++) {
+        const uint8_t *mrow = s_mat[vy];
+        const int16_t *lrow = s_light[vy];
+        const int8_t *drow = s_dither[vy & 3];
+
         int i = 0;
-        for (int gx = 0; gx < GRID_W; gx++) {
-            int l = lrow[gx] + drow[gx & 3];
+        for (int vx = 0; vx < s_gw && i < DRV_LCD_H_RES; vx++) {
+            int l = lrow[vx] + drow[vx & 3];
             int level = (l * LEVELS) >> 8;
             if (level < 0) level = 0;
             if (level >= LEVELS) level = LEVELS - 1;
 
-            lv_color_t c = s_pal[mrow[gx] * LEVELS + level];
-            s_row[i++] = c;
-            s_row[i++] = c;
-            s_row[i++] = c;
-            s_row[i++] = c;
+            lv_color_t c = s_pal[mrow[vx] * LEVELS + level];
+            int n = DRV_LCD_H_RES - i;
+            if (n > pix)
+                n = pix;
+            while (n--)
+                s_row[i++] = c;
         }
-        for (int k = 0; k < PIX; k++) {
+
+        int n = rows_left < pix ? rows_left : pix;
+        rows_left -= n;
+        while (n--) {
             memcpy(dst, s_row, DRV_LCD_H_RES * sizeof(lv_color_t));
             dst += DRV_LCD_H_RES;
         }
@@ -635,13 +766,25 @@ static void pond_step(void)
 {
     s_frame++;
 
-    if (--s_next_ambient == 0) {
+    if (--s_next_surface == 0) {
         /* a koi nosing the surface somewhere */
         const koi_t *k = &s_koi[rnd(KOI_COUNT)];
         ripple_spawn(k->x >> 8, k->y >> 8, 0, RIPPLE_LIFE / 2);
-        s_next_ambient = (uint16_t)(90 + rnd(160));
+        sound_play(SOUND_SURFACE);
+        s_next_surface = (uint16_t)(90 + rnd(160));
     }
 
+    if (--s_next_distant == 0) {
+        /* something falling in over by the far bank */
+        int a = (int)rnd(256);
+        int d = POND_R - 6 - (int)rnd(8);
+        ripple_spawn(WORLD_CX + ((COS(a) * d) >> 8),
+                     WORLD_CY + ((SIN(a) * d) >> 8), 0, RIPPLE_LIFE * 2 / 3);
+        sound_play(SOUND_DISTANT);
+        s_next_distant = (uint16_t)(220 + rnd(420));
+    }
+
+    camera_update();
     draw_water();
 
     for (int i = 0; i < KOI_COUNT; i++) {
@@ -662,6 +805,8 @@ static void pond_step(void)
             s_pads[i].notch++;
         draw_pad(&s_pads[i]);
     }
+    for (int i = 0; i < KOI_COUNT; i++)
+        draw_koi_underglow(&s_koi[i]);
 #endif
 
 #if MOTE_COUNT > 0
@@ -755,7 +900,12 @@ void pond_init(lv_obj_t *parent)
     for (int i = 0; i < MOTE_COUNT; i++)
         mote_reset(&s_motes[i]);
 #endif
-    s_next_ambient = (uint16_t)(90 + rnd(160));
+    s_next_surface = (uint16_t)(90 + rnd(160));
+    s_next_distant = (uint16_t)(220 + rnd(420));
+
+    s_cam_x = (int32_t)WORLD_CX << 8;
+    s_cam_y = (int32_t)WORLD_CY << 8;
+    camera_apply_zoom();
 
     size_t buf_size = (size_t)DRV_LCD_H_RES * DRV_LCD_V_RES * sizeof(lv_color_t);
     s_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
@@ -772,26 +922,41 @@ void pond_init(lv_obj_t *parent)
     pond_step();   /* have something on screen before the backlight comes up */
     lv_timer_create(frame_cb, FRAME_MS, NULL);
 
-    ESP_LOGI(TAG, "Pond ready: %dx%d grid, %d koi, %d pads, %d motes",
-             GRID_W, GRID_H, KOI_COUNT, PAD_COUNT, MOTE_COUNT);
+    ESP_LOGI(TAG, "Pond ready: %dx%d world, %d koi, %d pads, %d motes",
+             WORLD_W, WORLD_W, KOI_COUNT, PAD_COUNT, MOTE_COUNT);
 }
 
 void pond_tap(lv_coord_t x, lv_coord_t y)
 {
-    int gx = x / PIX, gy = y / PIX;
-    if (gx < 0) gx = 0;
-    if (gx >= GRID_W) gx = GRID_W - 1;
-    if (gy < 0) gy = 0;
-    if (gy >= GRID_H) gy = GRID_H - 1;
+    int wx = s_ox + x / s_pix;
+    int wy = s_oy + y / s_pix;
 
     /* three staggered rings read as one spreading disturbance */
-    ripple_spawn(gx, gy, 0, RIPPLE_LIFE);
-    ripple_spawn(gx, gy, 5, RIPPLE_LIFE * 3 / 4);
-    ripple_spawn(gx, gy, 11, RIPPLE_LIFE / 2);
+    ripple_spawn(wx, wy, 0, RIPPLE_LIFE);
+    ripple_spawn(wx, wy, 5, RIPPLE_LIFE * 3 / 4);
+    ripple_spawn(wx, wy, 11, RIPPLE_LIFE / 2);
 
     for (int i = 0; i < KOI_COUNT; i++) {
-        s_koi[i].tx = (int16_t)gx;
-        s_koi[i].ty = (int16_t)gy;
+        s_koi[i].tx = (int16_t)wx;
+        s_koi[i].ty = (int16_t)wy;
         s_koi[i].boost = (uint16_t)(70 + rnd(30));
     }
 }
+
+bool pond_zoom(int delta)
+{
+    int z = s_zoom + delta;
+    if (z < 0) z = 0;
+    if (z >= ZOOM_STEPS) z = ZOOM_STEPS - 1;
+    if (z == s_zoom)
+        return false;
+
+    s_zoom = z;
+    camera_apply_zoom();
+
+    /* wide open the camera sits on the pond; any closer and it picks a koi
+     * to drift after, so zooming in never lands on empty water */
+    s_focus = (s_zoom == 0) ? -1 : (s_focus >= 0 ? s_focus : koi_nearest_camera());
+    return true;
+}
+
