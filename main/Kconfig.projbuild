@@ -8,12 +8,27 @@ menu "Mochi"
             Seconds of inactivity before the device enters deep sleep.
             Default is 300 (5 minutes).
 
-    config MOCHI_IDLE_AUTO_PLAY_SEC
-        int "Idle auto-play interval (seconds)"
-        range 5 300
-        default 30
+    config MOCHI_POND_KOI_COUNT
+        int "Number of koi in the pond"
+        range 1 8
+        default 3
         help
-            Seconds to wait on the blank screen before auto-playing a random GIF.
-            Default is 30.
+            How many koi swim around. They cycle through three colourways.
+
+    config MOCHI_POND_LILY_COUNT
+        int "Number of lily pads"
+        range 0 12
+        default 5
+        help
+            Lily pads are scattered randomly on every boot. Set to 0 for
+            open water.
+
+    config MOCHI_POND_MOTE_COUNT
+        int "Number of drifting motes"
+        range 0 16
+        default 7
+        help
+            Faint glowing specks drifting over the surface. Set to 0 to
+            turn them off.
 
 endmenu

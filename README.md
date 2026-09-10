@@ -1,36 +1,24 @@
 # Watcher Mochi
 
-|                                |                                    |                                |                                  |                                        |
-| :----------------------------: | :--------------------------------: | :----------------------------: | :------------------------------: | :------------------------------------: |
-| ![happy](sd_content/happy.gif) | ![dancing](sd_content/dancing.gif) |  ![love](sd_content/love.gif)  | ![sleepy](sd_content/sleepy.gif) | ![surprised](sd_content/surprised.gif) |
-|             happy              |              dancing               |              love              |              sleepy              |               surprised                |
-| ![devil](sd_content/devil.gif) | ![sparkle](sd_content/sparkle.gif) | ![sushi](sd_content/sushi.gif) |   ![rain](sd_content/rain.gif)   |      ![wink](sd_content/wink.gif)      |
-|             devil              |              sparkle               |             sushi              |               rain               |                  wink                  |
+![koi pond](docs/preview.png)
 
-Build your own [Dasai Mochi](https://dasai.co) with [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html).
+A tiny pixel koi pond for the [SenseCAP Watcher](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html). Dark water, glowing rings, koi that come over when you tap the glass.
 
 ## What You Need
 
 - SenseCap Watcher: [Buy here - 69$ - Coupon: 5EB420ZS](https://www.seeedstudio.com/SenseCAP-Watcher-W1-A-p-5979.html?sensecap_affiliate=3gToNR2&referring_service=link)
-- A microSD card (any size, FAT32 formatted)
 - A USB-C cable
 - A computer with [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/) v5.4+ installed
 
+No SD card needed — the pond is drawn on the device, nothing is loaded from storage.
+
 ❤️ **If you want to buy a SenseCap Watcher, consider buying with the link or coupon above**. It's an affiliate link so I'll get a small percentage of your order as appreciation ^^
 
-## Step 1: Prepare the SD Card
-
-1. Format your microSD card as **FAT32**
-2. Copy all the `.gif` files from the `sd_content/` folder in this repo onto the root of the SD card
-3. Insert the SD card into your Watcher
-
-I've included 63 animations plus a `blank.gif` that shows between animations. You can add your own GIFs too - just drop any `.gif` file onto the root of the SD card.
-
-## Step 2: Install ESP-IDF
+## Step 1: Install ESP-IDF
 
 If you don't have ESP-IDF set up yet, follow the [official getting started guide](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/get-started/) for your platform (Windows, macOS, or Linux). Make sure you install **v5.4 or newer**.
 
-## Step 3: Build and Flash
+## Step 2: Build and Flash
 
 1. Connect your Watcher to your computer via USB-C
 2. Open a terminal in this project folder
@@ -45,18 +33,30 @@ idf.py flash monitor
 
 ## How It Works
 
-- **Tap the screen** to play a random animation with a pop sound
-- **Wait 30 seconds** and it auto-plays a random animation on its own
+- **Tap the screen** to drop a ripple with a soft pop. Rings spread out from your finger and the koi swim over to see what fell in
+- **Watch it** and the koi wander on their own, the lily pads bob, and one of the fish noses the surface every now and then
 - **Leave it alone for 5 minutes** and it enters deep sleep to save power
 - **Long-press the button** to manually enter deep sleep
 - **Press the button** to wake it back up
 
+The lily pads are scattered randomly on every boot, so no two ponds look the same.
+
+## How It's Drawn
+
+Everything lives in [`main/pond.c`](main/pond.c). There are no image assets — the pond is a small simulation rendered fresh every frame:
+
+- The pond runs on a **103×103 grid** (a quarter of the 412×412 panel) and is scaled up 4× on the way out. That's where the chunky pixels come from.
+- Each grid cell holds a **material** (water, lily pad, koi body, ...) and a **light level**. Colour is only resolved at the end, by looking each material up in its own dark-to-lit ramp, so anything that glows just adds light and the whole scene stays consistent.
+- Light falls off towards the rim, which is what makes the pond read as a pool in the dark rather than a flat background. A 4×4 **ordered dither** breaks up the banding between light levels.
+- A tap spawns three staggered rings. Each ring adds light where `(d² − r²) / 2r` — a cheap stand-in for the distance to the ring — lands near zero, and takes a little away just behind it for the trough.
+- Koi are an 11×7 sprite sampled in body space, so they rotate with their heading and flick their tail as they swim.
+
+All of it is fixed-point integer maths on a 256-entry sine table, which keeps a frame at a few milliseconds and leaves the CPU mostly idle.
+
 ## Configuration
 
-You can tweak settings like the sleep timeout and auto-play interval through `idf.py menuconfig` under the **Mochi** menu. Defaults are in `sdkconfig.defaults`.
+You can tweak the sleep timeout, the number of koi, lily pads, and drifting motes through `idf.py menuconfig` under the **Mochi** menu. Defaults are in `sdkconfig.defaults`.
 
 ## License
 
 The firmware source code is licensed under the [Apache License 2.0](LICENSE).
-
-The GIF animations in `sd_content/` are property of [Dasai](https://dasai.co) and are included here for personal use with the Watcher Mochi project. All rights to the animations belong to Dasai.
