@@ -59,9 +59,18 @@ All of it is fixed-point integer maths on a 256-entry sine table, which keeps a 
 
 ## How It Sounds
 
-There are no audio assets either. Every sound in [`main/sound.c`](main/sound.c) is one sine oscillator whose pitch glides **upwards** while its amplitude decays — that rising chirp is what makes a droplet read as a droplet, because the bubble the drop leaves behind shrinks and its resonance climbs. The starting pitch and decay are randomised per hit, so a pond full of them never sounds mechanical.
+There are no audio assets either — every sound in [`main/sound.c`](main/sound.c) is synthesised, from the physics of what actually makes the noise.
 
-There are four voices: the tap plop, a softer lower one when a koi noses the surface, a quiet far-off drop with a long tail, and a dry little tick for each knob detent. They are mixed in one task and fed through two damped feedback combs — just enough reverb to put the pond in a dark room — then through a `tanh` soft limiter so several drops at once bend rather than clip.
+The plop of something hitting water is not the drop. Phillips, Agarwal and Jordan filmed it with high-speed cameras and found the sound is driven by a small **air bubble trapped under the surface**: the impact makes a brief click, the crater takes a few milliseconds to form, then the entrapped bubble rings and drives the water surface like a piston ([Scientific Reports, 2018](https://www.nature.com/articles/s41598-018-27913-0)). Each voice here is that same three-part event — a filtered noise click, a short gap, then a decaying sine.
+
+Two results give the rest for free:
+
+- **[Minnaert's 1933 result](https://en.wikipedia.org/wiki/Minnaert_resonance)**, that a bubble in water resonates at `f₀ · r ≈ 3.26 Hz·m`. So voices are specified by *bubble radius*, not frequency, and the pitch falls out of the physics. A fingertip-sized pocket of air (3–4 mm) rings around 800–1000 Hz.
+- **[Van den Doel's liquid sound model](https://dl.acm.org/doi/10.1145/1101530.1101554)** (ACM TAP, 2005), where the pitch rises as the bubble rings: `f(t) = f₀ · (1 + ξ · d · t)` against an `e^(−d·t)` decay, with `ξ ≈ 0.1` found experimentally. That rise is the part your ear reads as *water*, and it costs one add per sample.
+
+Four voices: the tap plop, a softer lower one when a koi noses the surface, a quiet far-off drop with a long tail, and a dry noise tick for each knob detent. They mix in one task through two damped feedback combs — just enough reverb to put the pond in a dark room — then a `tanh` soft limiter so several drops at once bend rather than clip.
+
+For the record, a real dripping tap traps a bubble ten times smaller and plinks up near 9 kHz, which this 16 kHz codec and its small speaker could not reproduce anyway. Bigger, lower bubbles are both the right sound for a pond and the one the hardware can actually make.
 
 The audio task only streams while something is sounding, so silence costs nothing.
 

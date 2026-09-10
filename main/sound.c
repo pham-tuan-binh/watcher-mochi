@@ -1,11 +1,30 @@
 /**
  * Pond sound design, synthesised on the fly — there are no audio assets.
  *
- * Every sound is one sine oscillator whose pitch glides upwards while its
- * amplitude decays. That rising chirp is what makes a water droplet read as
- * a droplet (the bubble left behind by the drop shrinks, so its resonance
- * climbs). Randomising the starting pitch per hit keeps a pond of them from
- * sounding mechanical.
+ * The plop of something hitting water is not the drop itself. Phillips,
+ * Agarwal and Jordan filmed it (Scientific Reports, 2018) and found the
+ * sound is driven by a small air bubble trapped under the surface: the
+ * impact makes a brief click, the crater takes a few milliseconds to form,
+ * and then the entrapped bubble rings and drives the surface like a piston.
+ * https://www.nature.com/articles/s41598-018-27913-0
+ *
+ * So each voice here is that same three-part event:
+ *
+ *   1. a short filtered noise click for the impact,
+ *   2. a few milliseconds of nothing while the crater forms,
+ *   3. a decaying sine at the bubble's resonance.
+ *
+ * The pitch comes from Minnaert's 1933 result that a bubble in water
+ * resonates at f0 * r ~= 3.26 Hz*m, so voices are specified by bubble
+ * radius rather than by frequency and the pitch follows from the physics.
+ * https://en.wikipedia.org/wiki/Minnaert_resonance
+ *
+ * The pitch also rises as it rings, which is the part your ear reads as
+ * "water". Van den Doel's liquid sound model (ACM TAP, 2005) captures it as
+ * f(t) = f0 * (1 + XI * d * t) against an exp(-d * t) decay, with XI ~= 0.1
+ * found experimentally. That works out to roughly a 3 * XI rise over the
+ * audible life of the bubble whatever the damping, and it costs one add per
+ * sample. https://dl.acm.org/doi/10.1145/1101530.1101554
  *
  * Voices are mixed in a single task and fed through two damped feedback
  * combs, which is just enough reverb to put the pond in a dark room. The
@@ -30,7 +49,15 @@ static const char *TAG = "sound";
 #define BLOCK         256                     /* 16 ms per write       */
 #define MAX_VOICES    4
 #define MASTER_VOLUME 70
-#define ATTACK        24                      /* samples, kills the click */
+
+/* Minnaert: f0 * r ~= 3.26 Hz*m, so f0 = 3.26e6 / r for r in micrometres. */
+#define MINNAERT 3260000.0f
+
+/* Van den Doel's rise constant. 0.1 is the measured value; turning it up
+ * exaggerates the "wet" chirp, which some tiny speakers need. */
+#ifndef BUBBLE_XI
+#define BUBBLE_XI 0.10f
+#endif
 
 /* Two feedback combs at 77 ms and 108 ms, damped in the loop. */
 #define COMB_A 1231
@@ -40,20 +67,26 @@ static const char *TAG = "sound";
 // --- Voice presets ---
 
 typedef struct {
-    uint16_t f0_lo, f0_hi;  /* starting pitch is picked in this range, Hz */
-    uint16_t rise;          /* pitch it glides to, as a percent of f0     */
-    uint16_t sweep_ms;      /* how quickly it gets there                  */
-    uint16_t decay_ms;      /* amplitude decay time constant              */
+    uint16_t r_lo, r_hi;    /* entrapped bubble radius, micrometres */
+    uint16_t damping;       /* d, per second */
     uint16_t len_ms;
-    uint8_t  amp;           /* 0..255 */
+    uint8_t  amp;           /* bubble tone level, 0 = impact click only */
     uint8_t  send;          /* into the reverb, 0..255 */
+    uint8_t  click;         /* impact transient level, 0..255 */
+    uint8_t  click_ms;      /* impact transient decay */
+    uint8_t  click_lp;      /* impact brightness: one-pole coeff, 0..255 */
+    uint8_t  delay_ms;      /* crater forming, before the bubble rings */
 } preset_t;
 
+/* 3000-4200 um is roughly 780-1090 Hz, about a fingertip's worth of trapped
+ * air; the ambient voices use bigger, lazier bubbles further down. A real
+ * tap drip traps a bubble ten times smaller and plinks near 9 kHz, which
+ * this 16 kHz codec and its little speaker could not reproduce anyway. */
 static const preset_t PRESETS[SOUND_COUNT] = {
-    /* DROP    */ {  620,  820, 260, 14,  70, 210, 140, 190 },
-    /* SURFACE */ {  280,  380, 220, 26, 130, 290,  62, 150 },
-    /* DISTANT */ {  240,  320, 180, 32, 120, 280,  30, 225 },
-    /* TICK    */ { 1380, 1500, 100,  1,   8,  32,  42,   0 },
+    /* DROP    */ { 3000, 4200, 30, 200, 150, 190, 110, 4, 140,  7 },
+    /* SURFACE */ { 5000, 7000, 22, 280,  70, 150,  45, 6,  90, 10 },
+    /* DISTANT */ { 6000, 9000, 20, 280,  34, 230,  20, 7,  70, 12 },
+    /* TICK    */ { 4000, 4000, 30,  40,   0,   0,  95, 3, 205,  0 },
 };
 
 // --- Oscillator table ---
@@ -68,15 +101,27 @@ static inline float osc(float phase)
     return s_sine[i] + (s_sine[i + 1] - s_sine[i]) * (f - (float)i);
 }
 
+static inline float noise(uint32_t *state)
+{
+    uint32_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    return (float)(int32_t)x * (1.0f / 2147483648.0f);
+}
+
 // --- State ---
 
 typedef struct {
     bool active;
     uint32_t left;      /* samples remaining */
-    uint16_t attack;
+    uint32_t delay;     /* samples before the bubble starts ringing */
     float phase;        /* 0..1 */
-    float f_end, f_gap, f_k;
+    float freq, dfreq;  /* the rising resonance and its per-sample step */
     float env, env_k;
+    float click, click_k, click_lp, lp;
+    uint32_t rng;
     float send;
 } voice_t;
 
@@ -89,17 +134,10 @@ static float s_lpa, s_lpb;
 static int16_t s_block[BLOCK];
 static QueueHandle_t s_queue;
 
-static float rnd_hz(uint16_t lo, uint16_t hi)
-{
-    if (hi <= lo)
-        return (float)lo;
-    return (float)lo + (float)(esp_random() % (uint32_t)(hi - lo + 1));
-}
-
 /// Exponential per-sample multiplier that decays to 1/e in `ms`.
-static float decay_k(uint16_t ms)
+static float decay_ms_k(float ms)
 {
-    float samples = (float)ms * (float)SR / 1000.0f;
+    float samples = ms * (float)SR / 1000.0f;
     if (samples < 1.0f)
         samples = 1.0f;
     return expf(-1.0f / samples);
@@ -122,21 +160,25 @@ static void voice_start(sound_t which)
             v = &s_voices[i];
     }
 
-    float f0 = rnd_hz(p->f0_lo, p->f0_hi);
-    float f1 = f0 * (float)p->rise / 100.0f;
-
-    /* vary the decay too, so the drops sound like different sized drops */
-    uint16_t decay = (uint16_t)((uint32_t)p->decay_ms * (84 + esp_random() % 37) / 100);
+    uint32_t r = p->r_lo;
+    if (p->r_hi > p->r_lo)
+        r += esp_random() % (uint32_t)(p->r_hi - p->r_lo + 1);
+    float f0 = MINNAERT / (float)r;
+    float d = (float)p->damping;
 
     v->active = true;
     v->left = (uint32_t)p->len_ms * SR / 1000;
-    v->attack = ATTACK;
+    v->delay = (uint32_t)p->delay_ms * SR / 1000;
     v->phase = 0.0f;
-    v->f_end = f1;
-    v->f_gap = f1 - f0;
-    v->f_k = decay_k(p->sweep_ms);
+    v->freq = f0;
+    v->dfreq = f0 * BUBBLE_XI * d / (float)SR;
     v->env = (float)p->amp / 255.0f;
-    v->env_k = decay_k(decay);
+    v->env_k = expf(-d / (float)SR);
+    v->click = (float)p->click / 255.0f;
+    v->click_k = decay_ms_k((float)p->click_ms);
+    v->click_lp = (float)p->click_lp / 255.0f;
+    v->lp = 0.0f;
+    v->rng = esp_random() | 1u;
     v->send = (float)p->send / 255.0f;
 }
 
@@ -166,18 +208,25 @@ static void render_block(bool fade)
             if (!v->active)
                 continue;
 
-            float f = v->f_end - v->f_gap;
-            v->f_gap *= v->f_k;
+            float s = 0.0f;
 
-            v->phase += f * (1.0f / (float)SR);
-            if (v->phase >= 1.0f)
-                v->phase -= 1.0f;
+            /* the impact itself: a short, dull noise burst */
+            if (v->click > 0.0005f) {
+                v->lp += (noise(&v->rng) - v->lp) * v->click_lp;
+                s += v->lp * v->click;
+                v->click *= v->click_k;
+            }
 
-            float s = osc(v->phase) * v->env;
-            v->env *= v->env_k;
-            if (v->attack) {
-                s *= (float)(ATTACK - v->attack) / (float)ATTACK;
-                v->attack--;
+            /* then, once the crater has formed, the trapped bubble rings */
+            if (v->delay) {
+                v->delay--;
+            } else if (v->env > 0.0f) {
+                v->phase += v->freq * (1.0f / (float)SR);
+                if (v->phase >= 1.0f)
+                    v->phase -= 1.0f;
+                s += osc(v->phase) * v->env;
+                v->freq += v->dfreq;      /* f(t) = f0 (1 + XI d t) */
+                v->env *= v->env_k;
             }
 
             dry += s;
