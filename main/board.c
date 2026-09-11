@@ -105,31 +105,6 @@ void board_set_btn_long_press_cb(void (*cb)(void))
     lvgl_port_encoder_btn_register_event_cb(enc, BUTTON_LONG_PRESS_UP, btn_cb_wrapper, cb);
 }
 
-// --- Knob rotation ---
-
-static void (*s_knob_cb)(int dir);
-
-static void knob_left_cb(void *arg, void *arg2)
-{
-    (void)arg; (void)arg2;
-    if (s_knob_cb) s_knob_cb(-1);
-}
-
-static void knob_right_cb(void *arg, void *arg2)
-{
-    (void)arg; (void)arg2;
-    if (s_knob_cb) s_knob_cb(1);
-}
-
-void board_set_knob_cb(void (*cb)(int dir))
-{
-    lv_indev_t *enc = find_encoder();
-    if (!enc) { ESP_LOGE(TAG, "No encoder found"); return; }
-    s_knob_cb = cb;
-    lvgl_port_encoder_register_event_cb(enc, KNOB_LEFT, knob_left_cb, NULL);
-    lvgl_port_encoder_register_event_cb(enc, KNOB_RIGHT, knob_right_cb, NULL);
-}
-
 // --- Deep sleep ---
 
 /// Read PCA9535 input register over I2C to clear the interrupt latch.

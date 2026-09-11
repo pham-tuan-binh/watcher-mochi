@@ -3,7 +3,6 @@
 #include "freertos/timers.h"
 #include "board.h"
 #include "screen.h"
-#include "sound.h"
 
 static const char *TAG = "main";
 
@@ -29,18 +28,11 @@ static void reset_inactivity_timer(void)
     xTimerReset(s_inactivity_timer, 0);
 }
 
-static void on_knob(int dir)
-{
-    screen_knob(dir);
-    reset_inactivity_timer();
-}
-
 void app_main(void)
 {
     esp_log_level_set("*", ESP_LOG_INFO);
 
     board_init();
-    sound_init();
     screen_init();
 
     s_inactivity_timer = xTimerCreate("inact", pdMS_TO_TICKS(INACTIVITY_TIMEOUT_MS),
@@ -49,6 +41,5 @@ void app_main(void)
 
     board_set_btn_press_cb(reset_inactivity_timer);
     board_set_btn_long_press_cb(on_long_press);
-    board_set_knob_cb(on_knob);
     screen_set_tap_cb(reset_inactivity_timer);
 }
